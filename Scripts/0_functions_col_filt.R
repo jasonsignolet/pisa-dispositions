@@ -60,7 +60,7 @@ col_filt_cv5f <- function(DF){
   for(i in 1:5){
     this_val_set <- val_set[1:length(val_set) %% 5 == i]
     
-    train[[i]][-this_val_set <- NA
+    train[[i]][-this_val_set] <- NA
     test[[i]][this_val_set] <- NA
   }
   
@@ -73,32 +73,6 @@ col_filt_cv5f <- function(DF){
 
 
 ## tuning
-
-Y_5foldCV <- col_filt_cv(Y, MISSING)
-
-registerDoParallel()
-
-J_counter <-
-  foreach(nf = 1:3, .combine = rbind) %:%
-  foreach(fold = 1:5, .combine = rbind) %dopar%{
-    results <- optim(par = runif(nq*nf + ns*nf, -1, 1),
-                     fn = cost,
-                     gr = gradient,
-                     Y = Y_5foldCV[["train"]][[fold]], 
-                     MISSING = is.na(Y_5foldCV[[1]][[fold]]), 
-                     nq = nq, ns = ns, nf = nf, lambda = 1, alpha = 0.001,
-                     method = "L-BFGS-B",
-                     control = list(trace = 1,
-                                    maxit = 1000))
-    test_error <- cost(results$par, Y_5foldCV[["test"]][[fold]], MISSING = is.na(Y_5foldCV[[2]][[fold]]),
-                       nq, ns, nf, lambda)
-    
-    output <- data.frame(nf = nf, fold = fold, Jtrain = results$value, Jtest = test_error)
-    
-  }
-
-
-
 col_filt_opt_nf <- function(DF, max_latent_features = 7, n_cores = 8) {
   require(foreach)
   require(doParallel)

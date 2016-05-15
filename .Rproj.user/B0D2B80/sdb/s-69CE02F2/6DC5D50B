@@ -1,0 +1,18 @@
+{
+    "contents" : "#########################################\n## FUNCTIONS\n#########################################\n\n\n\n#########################################\n## Use the Pisa2012 dictionary to set missing values to NA\n#########################################\n\nmissingPISA <- function(input, dictionary){\n  require(data.table)\n  \n  variables_input <- colnames(input)\n  variables_dict <- unique(dictionary$variable)\n  \n  variables <- intersect(variables_input, variables_dict)\n  \n  for(i in variables){\n    tryCatch(\n      {\n        missing <- \n          dictionary[variable == (i) & Label %in% c(\"N/A\", \"Missing\", \"Invalid\"), value]\n        }, \n      error = function(e){return(missing <- NA)\n      }\n    )\n    \n    \n    if(is.na(missing[1])){\n      next\n    }\n    \n    input[eval(as.name(i)) %in% as.numeric(missing), eval(as.name(i)) := NA]\n  }\n  \n  return(input)\n  \n}",
+    "created" : 1463293896906.000,
+    "dirty" : false,
+    "encoding" : "ISO8859-1",
+    "folds" : "",
+    "hash" : "4054737501",
+    "id" : "6DC5D50B",
+    "lastKnownWriteTime" : 1463294529,
+    "path" : "C:/Users/Jason/Projects/pisa-dispositions/Scripts/0_functions.R",
+    "project_path" : "Scripts/0_functions.R",
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "type" : "r_source"
+}

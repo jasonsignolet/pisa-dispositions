@@ -37,3 +37,30 @@ missingPISA <- function(input, dictionary){
   return(input)
   
 }
+
+
+
+
+
+
+
+
+
+#########################################
+## Flag TRUE for each row where students 
+## were shown all parts of the test
+#########################################
+
+all_seated <- function(DT) {
+  apply(DT, 1, function(a) !7 %in% a)
+}
+
+
+
+
+
+
+
+
+
+

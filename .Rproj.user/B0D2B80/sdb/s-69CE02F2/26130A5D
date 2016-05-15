@@ -1,0 +1,18 @@
+{
+    "contents" : "#########################################\n## ETL Australian data for PISA 2012\n#########################################\n\nlibrary(data.table)\n\n\nidentifiers <- c(\"STRATUM\", \"SCHOOLID\", \"StIDStd\",\n                 \"ST03Q01\", \"ST03Q02\" # birth month, birth year\n                 )\n\ndemographics <- c(\"ST04Q01\", # gender\n                  \"ESCS\", \n                  \"\")\n\n\nstu <- fread(\"Data/Raw/AUS_INT_STU12_DEC03.csv\")\n\n\n\n#########################################\n## Rename state\n#########################################\n\n\nstates <- c(\"ACT\", \"VIC\", \"NSW\", \"QLD\", \"SA\", \"WA\", \"TAS\", \"NT\")\nstu$nameSTATE <- \"X\"\n\nfor(i in 1:8){\n  stu[ausSTATE == i, nameSTATE := states[i]]\n}\n\nstu[, nameSTATE := factor(nameSTATE, levels = states)]\n\n\n#########################################\n## Rename geolocation\n#########################################\n\ngeolocs <- c(\"Urban\", \"Provincial\", \"Rural\")\nstu$nameGEOLOC <- \"X\"\n\nfor(i in 1:3){\n  stu[ausGEOLOC_3 == i, nameGEOLOC := geolocs[i]]\n}\n\nstu[, nameGEOLOC := factor(nameGEOLOC, levels = geolocs)]\n\n\n#########################################\n## Rename gender\n#########################################\n\nmfs <- c(\"Female\", \"Male\")\nstu$nameGENDER <- \"X\"\n\nfor(i in 1:2){\n  stu[ST04Q01 == i, nameGENDER := mfs[i]]\n}\n\n\n#########################################\n## Rename indig\n#########################################\n\nindig <- c(\"Indigenous\", \"Non-indigenous\")\nstu$nameINDIG <- \"Indigenous\"\nstu[ausINDIG == 0, nameINDIG := \"Non-indigenous\"]\n\n\n#########################################\n## Rename ESCS\n#########################################\n\nstu[, qESCS := ESCS]\nstu[is.na(qESCS), qESCS := mean(stu$ESCS, na.rm = T)]\nstu[, \"nameESCS\" := \"Top quartile\"]\nstu[qESCS <= quantile(qESCS)[4], nameESCS := \"Third quartile\"]\nstu[qESCS <= quantile(qESCS)[3], nameESCS := \"Second quartile\"]\nstu[qESCS <= quantile(qESCS)[2], nameESCS := \"Bottom quartile\"]\nstu[, qESCS := NULL]\nstu[, nameESCS := factor(nameESCS, levels = c(\"Top quartile\", \"Third quartile\", \"Second quartile\", \"Bottom quartile\"))]\n\n",
+    "created" : 1463279482834.000,
+    "dirty" : false,
+    "encoding" : "ISO8859-1",
+    "folds" : "",
+    "hash" : "2654685485",
+    "id" : "26130A5D",
+    "lastKnownWriteTime" : 1463282474,
+    "path" : "C:/Users/Jason/Projects/pisa-dispositions/Scripts/1_ETL.R",
+    "project_path" : "Scripts/1_ETL.R",
+    "properties" : {
+        "tempName" : "Untitled1"
+    },
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "type" : "r_source"
+}

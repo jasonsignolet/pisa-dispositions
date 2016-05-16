@@ -4,6 +4,9 @@
 
 library(data.table)
 library(plyr)
+library(doParallel)
+library(foreach)
+library(ggplot2)
 
 
 #########################################
@@ -262,7 +265,7 @@ J_counter <-
                      control = list(trace = 1,
                                     maxit = 1000))
     test_error <- cost(results$par, Y_5foldCV[[2]][[fold]], MISSING = is.na(Y_5foldCV[[2]][[fold]]),
-                       nq, ns, nf, lambda)
+                       nq, ns, nf, lambda = 1)
     
     output <- data.table(nf = nf, fold = fold, Jtrain = results$value, Jtest = test_error)
     
@@ -309,12 +312,12 @@ output <- vec2matrix(results$par, Y, MISSING, nq, ns, nf)
 X <- output[[1]]
 THETA <- output[[2]]
 
-GUESS <- round(THETA %*% t(X))
+GUESS <- THETA %*% t(X)
 
 Y[MISSING] <- GUESS[MISSING]
 
 
-Y = Y + 2.5
+Y <- round(Y + 2.5)
 
 
 #########################################

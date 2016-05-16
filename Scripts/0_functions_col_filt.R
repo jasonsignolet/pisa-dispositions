@@ -48,7 +48,7 @@ gradient <- function(initial_values, Y, MISSING, nq, ns, nf, lambda, alpha){
 
 
 ## for 5-fold CV,  
-col_filt_cv5f <- function(DF){
+col_filt_cv5f_splitter <- function(DF){
   Y <- as.matrix(DF - 2.5)
   MISSING <- is.na(Y)
   
@@ -73,7 +73,7 @@ col_filt_cv5f <- function(DF){
 
 
 ## tuning
-col_filt_opt_nf <- function(DF, max_latent_features = 7, n_cores = 8) {
+col_filt_cv5f <- function(DF, max_latent_features = 7, n_cores = 8) {
   require(foreach)
   require(doParallel)
   require(data.table)
@@ -81,7 +81,7 @@ col_filt_opt_nf <- function(DF, max_latent_features = 7, n_cores = 8) {
   nq <- ncol(DF)
   ns <- nrow(DF)
   
-  Y <- col_filt_cv5f(DF)
+  Y <- col_filt_cv5f_splitter(DF)
   
   registerDoParallel(cores = n_cores)
   
@@ -121,4 +121,42 @@ col_filt_opt_nf <- function(DF, max_latent_features = 7, n_cores = 8) {
   return(J_counter)
 }
 
+##training
+col_filt_estimate <- function(DF, nf, key) {
+  Y <- as.matrix(DF - 2.5)
+  MISSING <- is.na(Y)
+  
+  nq <- ncol(DF)
+  ns <- nrow(DF)
+  
+  Y <- col_filt_cv5f_splitter(DF)
+  
+  results <- optim(par = runif(nq*nf + ns*nf, -1, 1),
+                   fn = cost,
+                   gr = gradient,
+                   Y = Y, 
+                   MISSING = MISSING, 
+                   nq = nq, 
+                   ns = ns, 
+                   nf = 4, 
+                   lambda = 1, 
+                   alpha = 0.001,
+                   method = "L-BFGS-B",
+                   control = list(trace = 1,
+                                  maxit = 1000)
+  )
+  
+  
+  output <- vec2matrix(results$par, Y, MISSING, nq, ns, nf = 4)
+  
+  X <- output[[1]]
+  THETA <- output[[2]]
+  
+  GUESS <- round(THETA %*% t(X) + 2.5)
+  GUESS <- as.data.table(GUESS)
+  setnames(GUESS, colnames(DF))
+  GUESS[, key := key]
+  
+  return(GUESS)
+}
 

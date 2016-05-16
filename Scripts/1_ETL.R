@@ -271,7 +271,7 @@ registerDoSEQ()
 
 J_summary <- 
   J_counter[, .(
-    mean(Jtrain / (sum(!MISSING) * 0.8)), 
+    mean(Jtrain / (sum(!MISSING) * 0.8)), # Jtrain is the sum total cost; we want average cost (mse)
     sd(Jtrain / (sum(!MISSING) * 0.8)) / sqrt(5),
     mean(Jtest / (sum(!MISSING) * 0.2)),
     sd(Jtest / (sum(!MISSING) * 0.2)) / sqrt(5)

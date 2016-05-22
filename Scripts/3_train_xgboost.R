@@ -1,3 +1,4 @@
+
 library(data.table)
 library(mlr)
 library(xgboost)
@@ -52,69 +53,43 @@ for (col in c("GENDER", "STATE", "GEOLOC", "INDIG"))
 
 
 #########################################
-## Tuning hyperparameters
+## Train model
 #########################################
 
+set.seed(20160522)
+test_set <- sort(sample(nrow(d), 400))
+train_set <- seq(1,nrow(d))[-test_set]
+
 task <- makeRegrTask(
-  data = d[, c(demographics, dispositions, maths_literacy[1]), with = F],
+  id = "pisa",
+  data = as.data.frame(d[, c(demographics, dispositions, maths_literacy[1]), with = F]),
   target = paste0("PV", 1, "MATH")
 )
 
 lrn <- makeLearner(
   "regr.xgboost",
   par.vals = list(
-    nrounds = 2000,
+    nrounds = 4000,
     print.every.n = 200,
-    #maximize = FALSE,
-    #early.stop.round = 10,
-    subsample = 0.5
+    maximize = FALSE,
+    early.stop.round = 10,
+    subsample = 0.5,
+    eta = 0.005,
+    max_depth = 4
   )
 )
 
-ps <- makeParamSet(
-  makeDiscreteParam("eta", values = c(0.005, 0.01, 0.02)),
-  makeDiscreteParam("max_depth", values = c(1, 4, 16))
-)
+fit <- train(lrn, task = task, subset = train_set)
 
-ctrl <- makeTuneControlGrid()
-
-cv5f <- makeResampleDesc("CV", iters = 5)
-
-results <- tuneParams(
-  lrn,
-  task = task,
-  resampling = cv5f,
-  par.set = ps,
-  control = ctrl,
-  measures = mae
-)
-
-opt <- as.data.table(results$opt.path)
-
-#########################################
-## Look at tuning results
-#########################################
-
-g <- ggplot(opt, aes(
-  x = reorder(max_depth, as.numeric(as.character(max_depth))), 
-  y = mae.test.mean, 
-  group = as.numeric(as.character(eta)), 
-  colour = reorder(eta, as.numeric(as.character(eta)))
-))
-
-g + geom_line() + geom_point()
-
-#+ coord_cartesian(ylim = c(0, 5000))
-
-## Choose 
-## eta = 0.005 (could go smaller)
-## max_depth = 4 
-## max nrounds = 2000
-## subsample = 0.5
+predict(fit, task = task, subset = test_set)
 
 
+pred <- predict(model = mod$learner.model, 
+                data = model.matrix(
+                  ~.-1,
+                  data = d[test_set, c(demographics, dispositions, maths_literacy[1]), with = F]))
 
+#imp <- xgb.importance(mod$features, data = mod$learner)
 
-
-
+#xgb.plot.importance(imp)
 

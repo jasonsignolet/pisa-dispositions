@@ -69,8 +69,8 @@ task <- makeRegrTask(
 lrn <- makeLearner(
   "regr.xgboost",
   par.vals = list(
-    nrounds = 4000,
-    print.every.n = 200,
+    nrounds = 8000,
+    print.every.n = 800,
     maximize = FALSE,
     early.stop.round = 10,
     subsample = 0.5,
@@ -81,15 +81,23 @@ lrn <- makeLearner(
 
 fit <- train(lrn, task = task, subset = train_set)
 
-predict(fit, task = task, subset = test_set)
+pred <- as.data.table(predict(fit, task = task, subset = test_set))
+
+ggplot(pred, aes(truth, response)) + 
+  geom_point() + 
+  geom_abline(colour = "red", linetype = "dashed")
+
+pred[, quantile(abs(truth-response), c(.5, .9, .99))]
 
 
-pred <- predict(model = mod$learner.model, 
-                data = model.matrix(
-                  ~.-1,
-                  data = d[test_set, c(demographics, dispositions, maths_literacy[1]), with = F]))
+imp <- xgb.importance(feature_names = fit$features, model = fit$learner.model)
+write.table(imp, "Outputs/Tables/feature_importance.csv", row.names = F, col.names = T, sep = ",")
 
-#imp <- xgb.importance(mod$features, data = mod$learner)
 
-#xgb.plot.importance(imp)
+xgb.plot.importance(imp)
 
+xgb.plot.multi.trees(fit$learner.model, feature_names = fit$features)
+
+pd <- generatePartialPredictionData(fit, task, imp$Feature)
+
+plotPartialPrediction(pd)

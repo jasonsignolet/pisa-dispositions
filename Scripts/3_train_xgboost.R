@@ -8,6 +8,11 @@ library(doParallel)
 
 d <- fread("Data/Clean/imputed_aus_data.csv")
 
+error_table <- data.table(percentile = c("pc50", "pc90", "pc99"),
+                          Trees = c(0,0,0),
+                          Stumps = c(0,0,0),
+                          RF = c(0,0,0))
+
 #########################################
 ## Columns
 #########################################
@@ -53,8 +58,20 @@ for (col in c("GENDER", "STATE", "GEOLOC", "INDIG"))
 
 
 #########################################
-## Train model
+## Restrict imputed item responses to within 1:4
 #########################################
+
+for(col in dispositions) {
+  set(d, i = which(d[[col]] < 1), j = col, value = 1)
+  set(d, i = which(d[[col]] > 4), j = col, value = 4)
+}
+
+
+#########################################
+## Train xgboost tree model
+#########################################
+
+current_name <- "_tree"
 
 set.seed(20160522)
 test_set <- sort(sample(nrow(d), 400))
@@ -66,7 +83,7 @@ task <- makeRegrTask(
   target = paste0("PV", 1, "MATH")
 )
 
-lrn <- makeLearner(
+lrn_tree <- makeLearner(
   "regr.xgboost",
   par.vals = list(
     nrounds = 8000,
@@ -79,25 +96,184 @@ lrn <- makeLearner(
   )
 )
 
-fit <- train(lrn, task = task, subset = train_set)
+fit_tree <- train(lrn_tree, task = task, subset = train_set)
 
-pred <- as.data.table(predict(fit, task = task, subset = test_set))
+pred_tree <- as.data.table(predict(fit_tree, task = task, subset = test_set))
 
-ggplot(pred, aes(truth, response)) + 
+### Tree outputs
+
+trplot_tree <- ggplot(pred_tree, aes(truth, response)) + 
   geom_point() + 
   geom_abline(colour = "red", linetype = "dashed")
 
-pred[, quantile(abs(truth-response), c(.5, .9, .99))]
+error_table[, Trees := pred_tree[, quantile(abs(truth-response), c(.5, .9, .99))] ]
 
 
-imp <- xgb.importance(feature_names = fit$features, model = fit$learner.model)
-write.table(imp, "Outputs/Tables/feature_importance.csv", row.names = F, col.names = T, sep = ",")
+imp_tree <- xgb.importance(feature_names = fit_tree$features, model = fit_tree$learner.model)
+write.table(imp_tree, paste0("Outputs/Tables/feature_importance", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
 
 
-xgb.plot.importance(imp)
+impplot_tree <- xgb.plot.importance(imp_tree)
+#xgb.plot.multi.trees(fit_tree$learner.model, feature_names = fit_tree$features)
+pd_tree <- generatePartialPredictionData(fit_tree, task, imp_tree$Feature)
+write.table(pd_tree, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
 
-xgb.plot.multi.trees(fit$learner.model, feature_names = fit$features)
+pdplot_tree <- plotPartialPrediction(pd_tree)
 
-pd <- generatePartialPredictionData(fit, task, imp$Feature)
+pdf(file = paste0("Outputs/Plots/trplot", current_name, ".pdf"),
+    width = 8, height = 8)
+print(trplot_tree)
+dev.off()
 
-plotPartialPrediction(pd)
+pdf(paste0("Outputs/Plots/impplot", current_name, ".pdf"),
+    width = 8, height = 8)
+impplot_tree
+dev.off()
+
+pdf(paste0("Outputs/Plots/pdplot", current_name, ".pdf"),
+    width = 12, height = 8)
+pdplot_tree
+dev.off()
+
+
+#########################################
+## Train xgboost stump model
+#########################################
+
+current_name <- "_stump"
+
+set.seed(20160522)
+test_set <- sort(sample(nrow(d), 400))
+train_set <- seq(1,nrow(d))[-test_set]
+
+task <- makeRegrTask(
+  id = "pisa",
+  data = as.data.frame(d[, c(demographics, dispositions, maths_literacy[1]), with = F]),
+  target = paste0("PV", 1, "MATH")
+)
+
+lrn_stump <- makeLearner(
+  "regr.xgboost",
+  par.vals = list(
+    nrounds = 8000,
+    print.every.n = 800,
+    maximize = FALSE,
+    early.stop.round = 10,
+    subsample = 0.5,
+    eta = 0.02,
+    max_depth = 1
+  )
+)
+
+fit_stump <- train(lrn_stump, task = task, subset = train_set)
+
+pred_stump <- as.data.table(predict(fit_stump, task = task, subset = test_set))
+
+### Stump outputs
+
+trplot_stump <- ggplot(pred_stump, aes(truth, response)) + 
+  geom_point() + 
+  geom_abline(colour = "red", linetype = "dashed")
+
+error_table[, Stumps := pred_stump[, quantile(abs(truth-response), c(.5, .9, .99))] ]
+
+
+imp_stump <- xgb.importance(feature_names = fit_stump$features, model = fit_stump$learner.model)
+write.table(imp_stump, paste0("Outputs/Tables/feature_importance", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+
+
+impplot_stump <- xgb.plot.importance(imp_stump)
+#xgb.plot.multi.trees(fit_stump$learner.model, feature_names = fit_stump$features)
+pd_stump <- generatePartialPredictionData(fit_stump, task, imp_stump$Feature)
+write.table(pd_stump, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+
+pdplot_stump <- plotPartialPrediction(pd_stump)
+
+pdf(file = paste0("Outputs/Plots/trplot", current_name, ".pdf"),
+    width = 8, height = 8)
+print(trplot_stump)
+dev.off()
+
+pdf(paste0("Outputs/Plots/impplot", current_name, ".pdf"),
+    width = 8, height = 8)
+impplot_stump
+dev.off()
+
+pdf(paste0("Outputs/Plots/pdplot", current_name, ".pdf"),
+    width = 12, height = 8)
+pdplot_stump
+dev.off()
+
+
+#########################################
+## Train xgboost RF model
+#########################################
+
+current_name <- "_rf"
+
+set.seed(20160522)
+test_set <- sort(sample(nrow(d), 400))
+train_set <- seq(1,nrow(d))[-test_set]
+
+task <- makeRegrTask(
+  id = "pisa",
+  data = as.data.frame(d[, c(demographics, dispositions, maths_literacy[1]), with = F]),
+  target = paste0("PV", 1, "MATH")
+)
+
+lrn_rf <- makeLearner(
+  "regr.xgboost",
+  par.vals = list(
+    nrounds = 1,
+    print.every.n = 800,
+    maximize = FALSE,
+    subsample = 0.5,
+    max_depth = 20,
+    num_parallel_tree = 2000,
+    colsample_bytree = 0.15
+  )
+)
+
+fit_rf <- train(lrn_rf, task = task, subset = train_set)
+
+pred_rf <- as.data.table(predict(fit_rf, task = task, subset = test_set))
+
+### RF outputs
+
+trplot_rf <- ggplot(pred_rf, aes(truth, response)) + 
+  geom_point() + 
+  geom_abline(colour = "red", linetype = "dashed")
+
+error_table[, RF := pred_rf[, quantile(abs(truth-response), c(.5, .9, .99))] ]
+
+
+imp_rf <- xgb.importance(feature_names = fit_rf$features, model = fit_rf$learner.model)
+write.table(imp_rf, paste0("Outputs/Tables/feature_importance", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+
+
+impplot_rf <- xgb.plot.importance(imp_rf)
+#xgb.plot.multi.trees(fit_rf$learner.model, feature_names = fit_rf$features)
+pd_rf <- generatePartialPredictionData(fit_rf, task, imp_rf$Feature)
+write.table(pd_rf, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+
+pdplot_rf <- plotPartialPrediction(pd_rf)
+
+pdf(file = paste0("Outputs/Plots/trplot", current_name, ".pdf"),
+    width = 8, height = 8)
+print(trplot_rf)
+dev.off()
+
+pdf(paste0("Outputs/Plots/impplot", current_name, ".pdf"),
+    width = 8, height = 8)
+impplot_rf
+dev.off()
+
+pdf(paste0("Outputs/Plots/pdplot", current_name, ".pdf"),
+    width = 12, height = 8)
+pdplot_rf
+dev.off()
+
+####
+
+
+write.table(error_table, "Outputs/Tables/error_table.csv", row.names = F, col.names = T, sep = ",")

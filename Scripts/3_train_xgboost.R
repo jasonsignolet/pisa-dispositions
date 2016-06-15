@@ -3,8 +3,7 @@ library(data.table)
 library(mlr)
 library(xgboost)
 library(ggplot2)
-library(foreach)
-library(doParallel)
+library(parallelMap)
 
 d <- fread("Data/Clean/imputed_aus_data.csv")
 
@@ -234,7 +233,9 @@ lrn_rf <- makeLearner(
   )
 )
 
+parallelStartSocket(8)
 fit_rf <- train(lrn_rf, task = task, subset = train_set)
+parallelStop()
 
 pred_rf <- as.data.table(predict(fit_rf, task = task, subset = test_set))
 

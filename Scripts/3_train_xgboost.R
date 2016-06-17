@@ -87,8 +87,8 @@ lrn_tree <- makeLearner(
   par.vals = list(
     nrounds = 8000,
     print.every.n = 800,
-    maximize = FALSE,
-    early.stop.round = 10,
+    #maximize = FALSE,
+    #early.stop.round = 10,
     subsample = 0.5,
     eta = 0.005,
     max_depth = 4
@@ -115,7 +115,7 @@ write.table(imp_tree, paste0("Outputs/Tables/feature_importance", current_name, 
 impplot_tree <- xgb.plot.importance(imp_tree)
 #xgb.plot.multi.trees(fit_tree$learner.model, feature_names = fit_tree$features)
 pd_tree <- generatePartialPredictionData(fit_tree, task, imp_tree$Feature)
-write.table(pd_tree, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+write.table(pd_tree$data, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
 
 pdplot_tree <- plotPartialPrediction(pd_tree)
 
@@ -156,8 +156,8 @@ lrn_stump <- makeLearner(
   par.vals = list(
     nrounds = 8000,
     print.every.n = 800,
-    maximize = FALSE,
-    early.stop.round = 10,
+    #maximize = FALSE,
+    #early.stop.round = 10,
     subsample = 0.5,
     eta = 0.02,
     max_depth = 1
@@ -184,7 +184,7 @@ write.table(imp_stump, paste0("Outputs/Tables/feature_importance", current_name,
 impplot_stump <- xgb.plot.importance(imp_stump)
 #xgb.plot.multi.trees(fit_stump$learner.model, feature_names = fit_stump$features)
 pd_stump <- generatePartialPredictionData(fit_stump, task, imp_stump$Feature)
-write.table(pd_stump, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+write.table(pd_stump$data, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
 
 pdplot_stump <- plotPartialPrediction(pd_stump)
 
@@ -225,7 +225,6 @@ lrn_rf <- makeLearner(
   par.vals = list(
     nrounds = 1,
     print.every.n = 800,
-    maximize = FALSE,
     subsample = 0.5,
     max_depth = 20,
     num_parallel_tree = 2000,
@@ -255,7 +254,7 @@ write.table(imp_rf, paste0("Outputs/Tables/feature_importance", current_name, ".
 impplot_rf <- xgb.plot.importance(imp_rf)
 #xgb.plot.multi.trees(fit_rf$learner.model, feature_names = fit_rf$features)
 pd_rf <- generatePartialPredictionData(fit_rf, task, imp_rf$Feature)
-write.table(pd_rf, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
+write.table(pd_rf$data, paste0("Outputs/Tables/partial_dependency", current_name, ".csv"), row.names = F, col.names = T, sep = ",")
 
 pdplot_rf <- plotPartialPrediction(pd_rf)
 

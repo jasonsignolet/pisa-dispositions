@@ -63,7 +63,7 @@ task <- makeRegrTask(
 lrn <- makeLearner(
   "regr.xgboost",
   par.vals = list(
-    nrounds = 2000,
+    nrounds = 8000,
     print.every.n = 200,
     #maximize = FALSE,
     #early.stop.round = 10,

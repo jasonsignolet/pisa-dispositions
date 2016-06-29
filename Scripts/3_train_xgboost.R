@@ -228,7 +228,7 @@ lrn_rf <- makeLearner(
     subsample = 0.5,
     max_depth = 20,
     num_parallel_tree = 2000,
-    colsample_bytree = 0.15
+    colsample_bylevel = 0.15
   )
 )
 

@@ -145,11 +145,13 @@ model_gbm <-
 
 gbm.plot(model_gbm, n.plots = 12)
 int_gbm <- gbm.interactions(model_gbm)
-#write.table(int_gbm$rank.list, "Outputs/Tables/interaction_ranks.csv", row.names = F, col.names = T, sep = ",")
-#write.table(int_gbm$interactions, "Outputs/Tables/interaction_full_table.csv", row.names = F, col.names = T, sep = ",")
+# write.table(int_gbm$rank.list, "Outputs/Tables/interaction_ranks.csv", row.names = F, col.names = T, sep = ",")
+# write.table(int_gbm$interactions, "Outputs/Tables/interaction_full_table.csv", row.names = F, col.names = T, sep = ",")
 int_gbm$rank.list %>% head
 gbm.perspec(model_gbm, 23, 2, z.range = c(425, 580), y.range = c(-3.81, 2.44), x.range = c(1,4))
 gbm.perspec(model_gbm, 3, 5, z.range = c(350, 560), y.range = c(1,2), x.range = c(1,2))
 gbm.perspec(model_gbm, 4, 5, z.range = c(425, 560), y.range = c(1,2), x.range = c(1,3))
 gbm.perspec(model_gbm, 23, 20, z.range = c(425, 560), y.range = c(1,4), x.range = c(1,4))
 gbm.perspec(model_gbm, 7, 3, z.range = c(425, 560), y.range = c(1,8), x.range = c(1,4))
+gbm.perspec(model_gbm, 2, 1, z.range = c(425, 580), x.range = c(-3.81, 2.44), y.range = c(0,1))
+gbm.perspec(model_gbm, 2, 3, z.range = c(425, 580), x.range = c(-3.81, 2.44), y.range = c(1,2))

@@ -1,0 +1,667 @@
+### Scripts for data analysis
+###
+### "Data science approach to PISA"
+### Florence Gabriel, Jason Signolet, Martin Westwell
+###
+###
+### External data files:
+###     PISA2012_StdQ_AUS.dat
+###     StdQ_dictionary.dat
+
+
+library(data.table)
+library(magrittr)
+library(foreach)
+library(doParallel)
+library(parallelMap)
+library(mlr)
+library(xgboost)
+library(gbm)
+library(dismo)
+library(ggplot2)
+
+
+############################
+### Custom functions
+############################
+
+all_seated <- function(DT) {
+  # Flag TRUE for each row where students sat all parts of the test
+  # Accepts a data.table of PISA student questionnaire data.
+  # Returns a vector of row indices excluding rows where the item response 
+  # code was 7 ("N/A", i.e. the student wasn't set this question).
+  apply(DT, 1, function(a) !7 %in% a)
+}
+
+
+missingPISA <- function(DT, dictionary){
+  # Use the Pisa2012 dictionary to set missing values to NA.
+  # Accepts a data.table of PISA student questionnaire data (DT) and
+  # a data.table of a dictionary mapping item response codes to values. 
+  # Returns the input data.table with missing responses converted to NA. 
+  require(data.table)
+  
+  variables_input <- colnames(DT)
+  variables_dict <- unique(dictionary$variable)
+  
+  variables <- intersect(variables_input, variables_dict)
+  
+  for(i in variables){
+    tryCatch(
+      {
+        missing <- 
+          dictionary[variable == (i) & Label %in% c("N/A", "Missing", "Invalid"), value]
+      }, 
+      error = function(e)
+      {
+        return(missing <- NA)
+      }
+    )
+    
+    if(is.na(missing[1])){
+      next
+    }
+    
+    DT[eval(as.name(i)) %in% as.numeric(missing), eval(as.name(i)) := NA]
+  }
+  
+  return(DT)
+  
+}
+
+
+
+### Collarborative filtering functions
+
+vec2matrix <- function(initial_values, Y, MISSING, nq, ns, nf){
+  # optim() uses initial_values as a vector, 
+  # but we need them as matrices
+  # Accepts the current X and THETA values as a concatenated vector.
+  # Accepts table of data (Y)
+  # Accepts a vector of missing values (MISSING)
+  # Accepts the length of X (nq) and THETA (ns), and their widths (nf)
+  # as vectors.
+  # Returns X, THETA and DELTA as matrices
+  
+  X_length <- nq * nf
+  
+  X <- matrix(initial_values[1:X_length], nrow = nq)
+  THETA <- matrix(initial_values[(X_length + 1):length(initial_values)], nrow = ns)
+  DELTA <- THETA %*% t(X) - Y; DELTA[MISSING] <- 0; DELTA <- as.matrix(DELTA)
+  
+  return(list(X, THETA, DELTA))
+}
+
+
+
+cost <- function(initial_values, Y, MISSING, nq, ns, nf, lambda){
+  # Accepts the current X and THETA values as a concatenated vector.
+  # Accepts table of data (Y)
+  # Accepts a vector of missing values (MISSING)
+  # Accepts the length of X (nq) and THETA (ns), and their widths (nf)
+  # as vectors.
+  # Returns the cost as a number: i.e. sum of squared error plus sum of the coefficients
+  
+  matrices <- vec2matrix(initial_values, Y, MISSING, nq, ns, nf)
+  
+  X <- matrices[[1]]
+  THETA <- matrices[[2]]
+  DELTA <- matrices[[3]]
+  
+  
+  J <- 0.5 * (sum(DELTA^2, na.rm = T) + lambda * (sum(X^2) + sum(THETA^2)))
+  
+}
+
+
+gradient <- function(initial_values, Y, MISSING, nq, ns, nf, lambda, alpha){
+  # Gradient of the cost function to perform gradient descent
+  # Accepts the current X and THETA values as a concatenated vector.
+  # Accepts table of data (Y)
+  # Accepts a vector of missing values (MISSING)
+  # Accepts the length of X (nq) and THETA (ns), and their widths (nf)
+  # as vectors.
+  # Accepts the regularisation constant (lambda) and the learning rate (alpha)
+  # Returns vector of X and THETA gradients
+  
+  matrices <- vec2matrix(initial_values, Y, MISSING, nq, ns, nf)
+  
+  X <- matrices[[1]]
+  THETA <- matrices[[2]]
+  DELTA <- matrices[[3]]
+  
+  X_grad <- (t(DELTA) %*% THETA) + lambda * X
+  THETA_grad <- (DELTA %*% X) + lambda * THETA
+  
+  return(c(X_grad, THETA_grad))
+  
+}
+
+
+col_filt_cv <- function(Y, MISSING){
+  # Used for collaborative filtering 5-fold CV.
+  # Accepts the table of data (Y) and a vector of missing values
+  # Splits the data in 5 random folds (excluding the missing values)
+  # and returns a list of 5 pairs of training and validation sets
+  
+  val_set <- matrix(c(sample(which(MISSING == F))), ncol = 5)
+  colnames(val_set) <- paste("Set", 1:5, sep = ".")
+  
+  Y_train <- list(Y,Y,Y,Y,Y)
+  Y_test <- list(Y,Y,Y,Y,Y)
+  
+  for(i in 1:5){
+    Y_train[[i]][val_set[,i]] <- NA
+    Y_test[[i]][-val_set[,i]] <- NA
+  }
+  
+  return(list(Y_train, Y_test))
+}
+
+
+############################
+### Load and clean data
+############################
+
+### We are only interested in the disposition, demographic, and mathematical literacy scores
+identifiers_raw <- c("STRATUM", "SCHOOLID", "StIDStd",
+                 "ST03Q01", "ST03Q02" # birth month, birth year
+)
+identifiers <- c("STRATUM", "SCHOOLID", "StIDStd",
+                     "BIRTHMONTH", "BIRTHYEAR" # birth month, birth year
+)
+
+demographics_raw <- c("ST04Q01", "ESCS", "ausSTATE", "ausGEOLOC_3", "ausINDIG")
+demographics <- c("GENDER", "ESCS", "STATE", "GEOLOC", "INDIG")
+
+# dispositions
+int_motivation <- c("ST29Q01", "ST29Q03", "ST29Q04", "ST29Q06") # intrinsic motivation INTMAT
+ext_motivation <- c("ST29Q02", "ST29Q05", "ST29Q07", "ST29Q08") # extrinsic motivation INSTMOT
+self_concept <- c("ST42Q02", "ST42Q04", "ST42Q06", "ST42Q07", "ST42Q09") # SCMAT
+self_efficacy <- c("ST37Q01", "ST37Q02", "ST37Q03", "ST37Q04", "ST37Q05", "ST37Q06", "ST37Q07", "ST37Q08") # MATHEFF
+control_in_school <- c("ST91Q01", "ST91Q02", "ST91Q03", "ST91Q04", "ST91Q05", "ST91Q06")
+control_in_maths <- c("ST43Q01", "ST43Q02", "ST43Q03", "ST43Q04", "ST43Q05", "ST43Q06")
+attr_failure <- c("ST44Q01", "ST44Q03", "ST44Q04", "ST44Q05", "ST44Q07", "ST44Q08") # FAILMAT
+maths_anxiety <- c("ST42Q01", "ST42Q03", "ST42Q05", "ST42Q08", "ST42Q10") # ANXMAT
+subj_norms <- c("ST35Q01", "ST35Q02", "ST35Q03", "ST35Q04", "ST35Q05", "ST35Q06") # SUBNORM
+
+dispositions <- c(int_motivation, ext_motivation, self_concept,
+                  self_efficacy, control_in_school, control_in_maths, attr_failure,
+                  maths_anxiety, subj_norms)
+
+disposition_indices <- c("MATHEFF", "SCMAT", "ANXMAT", "INTMAT", "INSTMOT", "FAILMAT", "SUBNORM")
+
+# mathematical literacy score plausible values
+maths_literacy <- paste0("PV", 1:5, "MATH")
+
+# Import PISA 2012 student questionnaire data with raw item responses
+stdq <- fread("Data/Raw/PISA2012_StdQ_AUS.dat", 
+              select = c(identifiers_raw, demographics_raw, dispositions, disposition_indices, maths_literacy)
+)
+
+
+# Keep only rows where students were set the entire questionnaire
+# and set missing values to NA
+stdq_dict <- fread("Data/Raw/StdQ_dictionary.dat")
+all_seated_test <-
+  all_seated(stdq[, dispositions, with = F]) # reduces total rows from 14481 to 4752
+
+stdq <- missingPISA(stdq[all_seated_test], stdq_dict)
+
+
+# Rename unclear identifier cols
+setnames(stdq, c("ST03Q01", "ST03Q02"), c("BIRTHMONTH", "BIRTHYEAR"))
+
+# Remove missing ESCS rows
+stdq <- stdq[!is.na(ESCS)]
+
+# Rename states
+states <- c("ACT", "VIC", "NSW", "QLD", "SA", "WA", "TAS", "NT")
+for(i in 1:8){
+  stdq[ausSTATE == i, STATE := states[i]]
+}
+
+# Rename geolocation
+geolocs <- c("Urban", "Provincial", "Rural")
+for(i in 1:3){
+  stdq[ausGEOLOC_3 == i, GEOLOC := geolocs[i]]
+}
+
+# Rename gender
+mfs <- c("Female", "Male")
+for(i in 1:2){
+  stdq[ST04Q01 == i, GENDER := mfs[i]]
+}
+
+# Rename indig
+indig <- c("Indigenous", "Non-indigenous")
+stdq$INDIG <- "Indigenous"
+stdq[ausINDIG == 0, INDIG := "Non-indigenous"]
+
+# Make demographics columns into factors
+for (col in c("GENDER", "STATE", "GEOLOC", "INDIG"))
+  set(stdq, j=col, value=as.factor(stdq[[col]]))
+
+# Clear unused cols
+stdq[, `:=`(ausSTATE = NULL,
+            ausGEOLOC_3 = NULL,
+            ST04Q01 = NULL,
+            ausINDIG = NULL)]
+
+
+
+
+
+
+
+### Model 1
+
+
+
+stdq1 <- stdq[, c(identifiers, demographics, dispositions, maths_literacy), with = F]
+
+
+### For Model 1, the missing/invalid 
+### item responses need to be imputed
+
+# Impute missing disposition data using collaborative filtering
+
+# Centre data on 0 for training
+Y <- as.matrix(stdq1[, dispositions, with = F] - 2.5)
+
+# Define missing values
+MISSING <- is.na(Y)
+
+# Define feature matrix dimensions
+ns <- nrow(Y)
+nq <- ncol(Y)
+
+# Define folds for cross-validation
+Y_5foldCV <- col_filt_cv(Y, MISSING)
+
+# Tune number of hidden features (nf) across a grid from 1:7
+registerDoParallel(cores = 8)
+
+J_counter <-
+  foreach(nf = 1:7, .combine = rbind) %:%
+  foreach(fold = 1:5, .combine = rbind, .multicombine = T, .packages = "data.table") %dopar%{
+    results <- optim(par = runif(nq*nf + ns*nf, -1, 1),
+                     fn = cost,
+                     gr = gradient,
+                     Y = Y_5foldCV[[1]][[fold]], 
+                     MISSING = is.na(Y_5foldCV[[1]][[fold]]), 
+                     nq = nq, ns = ns, nf = nf, lambda = 1, #alpha = 0.001,
+                     method = "L-BFGS-B",
+                     control = list(trace = 1,
+                                    maxit = 1000))
+    test_error <- cost(results$par, Y_5foldCV[[2]][[fold]], MISSING = is.na(Y_5foldCV[[2]][[fold]]),
+                       nq, ns, nf, lambda = 1)
+    
+    output <- data.table(nf = nf, fold = fold, Jtrain = results$value, Jtest = test_error)
+    
+  }
+registerDoSEQ()
+
+# Summarise the nf tuning
+J_summary <- 
+  J_counter[, .(
+    mean(Jtrain / (sum(!MISSING) * 0.8)), # Jtrain is the sum total cost; we want average cost (mse)
+    sd(Jtrain / (sum(!MISSING) * 0.8)) / sqrt(5),
+    mean(Jtest / (sum(!MISSING) * 0.2)),
+    sd(Jtest / (sum(!MISSING) * 0.2)) / sqrt(5)
+  ), by = nf]
+
+# Plot for Figure 1
+p1 <- ggplot(J_summary, aes(nf)) + 
+  geom_line(aes(y = V1), linetype = "dashed") + 
+  geom_line(aes(y = V3)) +
+  geom_errorbar(aes(ymin = V1 - V2 /2, ymax = V1 + V2 /2)) +
+  geom_errorbar(aes(ymin = V3 - V4 /2, ymax = V3 + V4 /2)) +
+  xlab("Complexity (nf)") + ylab("Error")
+
+# Optimum nf is 6
+nf <- 6
+
+# Learn the best coefficient values
+# (cost and gradient functions defined above)
+results <- optim(par = runif(nq*nf + ns*nf, -1, 1),
+                 fn = cost,
+                 gr = gradient,
+                 Y = Y, 
+                 MISSING = MISSING, 
+                 nq = nq, 
+                 ns = ns, 
+                 nf = nf, 
+                 lambda = 1, 
+                 method = "L-BFGS-B",
+                 control = list(trace = 1,
+                                maxit = 1000)
+)
+
+output <- vec2matrix(results$par, Y, MISSING, nq, ns, nf)
+
+# Estimate the missing values 
+X <- output[[1]]
+THETA <- output[[2]]
+GUESS <- THETA %*% t(X)
+Y[MISSING] <- GUESS[MISSING]
+
+# Put the values back on the right scale
+Y <- round(Y + 2.5)
+
+# Replace raw disposition values with imputed values
+stdq1 <- cbind(stdq1[, !names(stdq1) %in% dispositions, with = F], Y)
+
+# Correct values that are out of range
+for(col in dispositions) {
+  set(stdq1, i = which(stdq1[[col]] < 1), j = col, value = 1)
+  set(stdq1, i = which(stdq1[[col]] > 4), j = col, value = 4)
+}
+
+
+
+
+
+
+
+
+
+
+### Train xgboost model
+
+# Set controllers for hyperparameter tuning
+set.seed(20160522)
+test_set <- sort(sample(nrow(stdq1), 400))
+train_set <- seq(1,nrow(stdq1))[-test_set]
+
+# Define input and output data
+task <- makeRegrTask(
+  id = "pisa",
+  data = as.data.frame(stdq1[train_set, c(demographics, dispositions, maths_literacy[1]), with = F]),
+  target = "PV1MATH"
+)
+
+# Define model and fixed hyperparameters
+lrn <- makeLearner(
+  "regr.xgboost",
+  par.vals = list(
+    nrounds = 2000,
+    subsample = 0.5
+  )
+)
+
+# Define hyperparameter values to test
+ps <- makeParamSet(
+  makeDiscreteParam("eta", values = c(0.005, 0.01, 0.02)),
+  makeDiscreteParam("max_depth", values = c(1, 2, 5, 10, 20))
+)
+
+# Tell the optimiser to do a grid search
+ctrl <- makeTuneControlGrid()
+
+# Tell the optimiser to use 5-fold cross-validation
+cv5f <- makeResampleDesc("CV", iters = 5)
+
+# Perform tuning in parallel
+parallelStartSocket(5)
+
+results <- tuneParams(
+  lrn,
+  task = task,
+  resampling = cv5f,
+  par.set = ps,
+  control = ctrl,
+  measures = mae
+)
+
+parallelStop()
+
+# Look at tuning results
+opt <- as.data.table(results$opt.path)
+
+# Plot Figure 3a
+p3a <- 
+  ggplot(opt, aes(
+    x = reorder(max_depth, as.numeric(as.character(max_depth))), 
+    y = mae.test.mean, 
+    group = as.numeric(as.character(eta)), 
+    linetype = reorder(eta, as.numeric(as.character(eta))),
+    shape = reorder(eta, as.numeric(as.character(eta)))
+  )) + 
+  geom_line() + 
+  geom_point() +
+  ylab("Cross-validation error") +
+  xlab("Tree depth") +
+  scale_shape_discrete(name = "Learning rate") +
+  scale_linetype_discrete(name = "Learning rate")
+
+
+
+# Fit the model to the whole training set
+# Optimised with eta = 0.005, max_depth = 4
+
+# Define the hyperparameter set
+task1 <- makeRegrTask(
+  id = "pisa",
+  data = as.data.frame(stdq1[, c(demographics, dispositions, maths_literacy[1]), with = F]),
+  target = "PV1MATH"
+)
+
+lrn_model1 <- makeLearner(
+  "regr.xgboost",
+  par.vals = list(
+    nrounds = 2000,
+    print.every.n = 800,
+    subsample = 0.5,
+    eta = 0.005,
+    max_depth = 5
+  )
+)
+
+# Do the fitting
+fit_model1 <- train(lrn_model1, task = task1, subset = train_set)
+
+# Make predictions from the test set
+pred_model1 <- as.data.table(predict(fit_model1, task = task1, subset = test_set))
+
+### Tree outputs
+
+# Figure 4a
+p4a <- 
+  ggplot(pred_model1, aes(truth, response)) + 
+  geom_point() + 
+  geom_abline(linetype = "dashed") + 
+  coord_cartesian(xlim = c(200, 800), ylim = c(200, 800))
+
+# Error distribution of predictions on the hold-out set
+pred_model1[, quantile(abs(truth-response), c(.5, .9, .99))]
+
+# Calculate feature importance
+imp_model1 <- xgb.importance(feature_names = fit_model1$features, model = fit_model1$learner.model)
+
+# Figure 5
+p5 <- xgb.plot.importance(imp_model1)
+
+# Calculate partial dependency plots
+pd_model1 <- generatePartialPredictionData(fit_model1, task, imp_model1$Feature)
+
+# Figure 6
+p6 <- plotPartialPrediction(pd_model1)
+
+
+
+
+
+
+#### Model 2
+
+
+stdq2 <- stdq[, c(identifiers, demographics, disposition_indices, maths_literacy), with = F]
+
+
+# Only keep rows where all of the disposition indices are available
+# Missing values are marked as 9999.0 
+for(col in names(stdq2)) {
+  # Returns in 4528 rows
+  stdq2 <- stdq2[eval(parse(text = col)) != 9999.0]
+}
+
+
+
+# Use the same students from training set 1 in set 2
+students_in_testset1 <- stdq2[StIDStd %in% stdq1[test_set, StIDStd], StIDStd]
+test_set_2 <- which(stdq2$StIDStd %in% students_in_testset1)
+train_set_2 <- seq(1,nrow(stdq2))[-test_set_2]
+
+
+# Set controllers for hyperparameter tuning
+task2 <- makeRegrTask(
+  id = "pisa2",
+  data = as.data.frame(stdq2[train_set_2, c(demographics, disposition_indices, "PV1MATH"), with = F]),
+  target = "PV1MATH"
+)
+
+lrn2 <- makeLearner(
+  "regr.gbm",
+  par.vals = list(
+    n.trees = 1500,
+    bag.fraction = 0.5
+  )
+)
+
+ps2 <- makeParamSet(
+  makeDiscreteParam("shrinkage", values = c(0.005, 0.01, 0.02)),
+  makeDiscreteParam("interaction.depth", values = c(1, 2, 5, 10, 20))
+)
+
+# Already defined for Model 1:
+# ctrl <- makeTuneControlGrid()
+# cv5f <- makeResampleDesc("CV", iters = 5)
+
+
+# Perform tuning
+parallelStartSocket(5)
+
+results2 <- tuneParams(
+  lrn2,
+  task = task2,
+  resampling = cv5f,
+  par.set = ps2,
+  control = ctrl,
+  measures = mae
+)
+
+parallelStop()
+
+# Look at tuning results
+opt2 <- as.data.table(results2$opt.path)
+
+# Figure 3b
+p3b <- 
+  ggplot(opt2, aes(
+    x = reorder(interaction.depth, as.numeric(as.character(interaction.depth))), 
+    y = mae.test.mean, 
+    group = as.numeric(as.character(shrinkage)), 
+    linetype = reorder(shrinkage, as.numeric(as.character(shrinkage))),
+    shape = reorder(shrinkage, as.numeric(as.character(shrinkage)))
+  )) + 
+  geom_line() + 
+  geom_point() +
+  ylab("Cross-validation error") +
+  xlab("Tree depth") +
+  scale_shape_discrete(name = "Learning rate") +
+  scale_linetype_discrete(name = "Learning rate")
+
+
+## Choose 
+## eta = 0.005 (could go smaller)
+## max_depth = 4 
+## max nrounds = 2000
+## subsample = 0.5
+
+# Fit the to the whole training set
+fit_model2 <-
+  gbm.step(gbm.y = "PV1MATH", 
+           gbm.x = c(demographics, disposition_indices),
+           data = as.data.frame(stdq2[train_set_2, ]),
+           family = "gaussian",
+           n.folds = 5,
+           n.trees = 1500,
+           max.trees = 1500,
+           learning.rate = 0.005,
+           tree.complexity = 10,
+           bag.fraction = 0.5,
+           verbose = T
+  )
+
+# Make predictions from the holdout set
+pred_model2 <- data.table(
+  truth = stdq2[test_set_2, PV1MATH],
+  response = predict(fit_model2, as.data.frame(stdq2[test_set_2, ]), n.trees = 1500)
+)
+
+# Figure 4b
+p4b <-
+  ggplot(pred_model2, aes(truth, response)) + 
+  geom_point() + 
+  geom_abline(slope = 1, linetype = "dashed") +
+  coord_cartesian(xlim = c(200, 800), ylim = c(200, 800))
+
+
+# Relative influences for Model 2
+imp_model2 <- fit_model2$contributions
+
+### PD plots in ggplot
+# Built-in function:
+# gbm.plot(fit_model2, n.plots = 12)
+
+pd_model2 <-
+  foreach(k = 1:12) %do% {
+    as.data.table(gbm::plot.gbm(fit_model2, k, return.grid = TRUE))
+  }
+
+pd_model2 <- Reduce(function(x, y) merge(x, y, by = "y", all = T), pd_model2)
+
+for(col in names(pd_model2)) {
+  if(is.factor(pd_model2[[col]])) {
+    set(pd_model2, j = col, value = as.numeric(pd_model2[[col]]))
+  }
+}
+
+pd_model2_long <- melt(pd_model2, id.vars = "y")
+
+# Factorise the variables and order by relative influence
+pd_model2_long[, variable := factor(variable, levels = fit_model2$contributions$var %>% as.character)]
+
+# Figure 7
+p7 <- 
+  ggplot(pd_model2_long, aes(value, y)) + 
+  geom_point() + 
+  facet_wrap(~variable, scales = "free_x") +
+  ylab("Mathematics literacy score")
+
+
+# Interactions
+int_model2 <- gbm.interactions(fit_model2)
+int_model2_rankings <- int_model2$rank.list
+
+# Plotting range
+dr <- c(-3.75, 3.907)
+
+# Figure 8a: ANXMAT 8 vs MATHEFF 6
+gbm.perspec(fit_model2, 8, 6, z.range = c(350, 600), x.range = dr, y.range = dr)
+
+# Figure 8b: ANXMAT 8 vs SCMAT 7
+gbm.perspec(fit_model2, 8, 7, z.range = c(400, 580), x.range = dr, y.range = dr)
+
+# Figure 8c: ANXMAT 8 vs ESCS 2
+gbm.perspec(fit_model2, 8, 2, z.range = c(400, 580), x.range = dr, y.range = dr)
+
+# Figure 8d: MATHEFF 6 vs ESCS 2
+gbm.perspec(fit_model2, 2, 6, z.range = c(300, 580), x.range = dr, y.range = dr)
+
+# Figure 8e: ANXMAT 8 vs INTMAT 9
+gbm.perspec(fit_model2, 9, 8, z.range = c(400, 580), x.range = dr, y.range = dr)
+
+# Figure 8f: ANXMAT vs GENDER
+gbm.perspec(fit_model2, 8, 1, z.range = c(425, 580), x.range = dr, y.range = c(0, 1))

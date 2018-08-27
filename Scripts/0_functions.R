@@ -31,7 +31,7 @@ missingPISA <- function(input, dictionary){
       next
     }
     
-    input[eval(as.name(i)) %in% as.numeric(missing), eval(as.name(i)) := NA]
+    input[eval(as.name(i)) %in% as.numeric(missing), (i) := NA]
   }
   
   return(input)
